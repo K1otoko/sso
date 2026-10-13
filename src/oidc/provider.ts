@@ -26,6 +26,10 @@ export interface OidcProviderDependencies {
 
 export function createOidcProvider(deps: OidcProviderDependencies): Provider {
   const { config, database, users, jwks } = deps;
+  // Cookie 的 Secure 属性跟随对外地址的协议：
+  // HTTPS 部署启用；纯 HTTP 部署（IP/内网联调阶段）必须关闭，
+  // 否则 koa 发送 cookie 时会直接抛错（表现为所有登录请求 500）。
+  const secureCookies = new URL(config.oidcIssuer).protocol === 'https:';
 
   const configuration: Configuration = {
     adapter: createAdapterFactory(database),
@@ -45,11 +49,11 @@ export function createOidcProvider(deps: OidcProviderDependencies): Provider {
     cookies: {
       keys: config.oidcCookieKeys,
       long: {
-        secure: config.nodeEnv === 'production',
+        secure: secureCookies,
         sameSite: 'lax',
       },
       short: {
-        secure: config.nodeEnv === 'production',
+        secure: secureCookies,
         sameSite: 'lax',
       },
     },

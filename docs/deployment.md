@@ -73,3 +73,17 @@ API_RESOURCE=urn:sso:api
   部署会被判定失败并触发回滚（这是有意的门禁）
 - 部署机器上需要已登录 ACR，容器才能拉取私有镜像
 - 本仓库分支必须是 `master`（或在 workflow 里改触发分支）
+
+## 7. nginx 反向代理（当前生产拓扑）
+
+- **对外入口**：`http://82.157.201.240:4000`（nginx），与 gateway 同机不同端口
+- **配置归档**：[deploy/nginx/sso.conf](../deploy/nginx/sso.conf)；
+  服务器上位于 `/project/sso/nginx/sso.conf`，
+  软链到 `/etc/nginx/sites-enabled/sso`（nginx -t 后 reload 生效）
+- **上游**：`http://127.0.0.1:4400` —— 服务端 `.env` 中 `SSO_PORT=4400`，
+  把 4000 端口让给 nginx；compose 默认值（4000）不受影响
+- **关键细节**：`proxy_set_header Host $http_host` 必须保留端口，
+  否则 discovery 与授权跳转地址会缺少 `:4000`（`$host` 会丢端口）
+- **Cookie**：`Secure` 属性跟随 `OIDC_ISSUER` 协议——纯 HTTP 阶段自动关闭
+  （否则 koa 发 cookie 会抛错、登录接口全部 500）；将来换
+  `https://<域名>/oidc` + TLS 后会自行启用
