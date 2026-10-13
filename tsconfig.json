@@ -17,5 +17,12 @@
     "skipLibCheck": true,
     "types": ["node"]
   },
-  "include": ["src/**/*.ts", "drizzle.config.ts", "eslint.config.js"]
+  "include": [
+    "src/**/*.ts",
+    "scripts/**/*.ts",
+    "test/**/*.ts",
+    "drizzle.config.ts",
+    "vitest.config.ts",
+    "eslint.config.js"
+  ]
 }

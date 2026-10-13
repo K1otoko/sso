@@ -1,63 +1,96 @@
-# SSO Server
+# SSO 认证中心
 
 基于 Express 5、`oidc-provider`、PostgreSQL、Drizzle ORM 和 TypeScript 的
-OpenID Connect 服务端骨架。
+OpenID Connect 认证中心（本仓库只包含认证中心；网关、前端、业务服务在各自独立仓库）。
+
+> 部署拓扑：认证中心与运维平台属于基础设施平面、各自独立入口（不经业务网关）；
+> 业务流量只有网关一个公网入口。
+
+## 功能概览
+
+- 真实登录：用户名 + 密码（scrypt 哈希）；**登录页面由前端仓库实现**，
+  认证中心提供交互 API（含防爆破限速）
+- OIDC 授权码 + PKCE 全流程；单点登录（SSO）；登出
+- JWT access token（ES256，网关/服务可离线验签）+ JWKS；三档角色 claim（super / admin / user）
+- 续期令牌（会话绑定、轮换、重放检测）
+- 账号工具：种子脚本 + 命令行建号/改角色
+- 用户数据与 OIDC 运行时数据持久化（PostgreSQL，重启不掉登录态）
+
+> 说明：`userinfo` 端点未启用——身份信息随 ID token（与 JWT access token）返回。
 
 ## 环境要求
 
 - Node.js 24 或更高版本
-- npm 10 或更高版本
-- PostgreSQL 仅在执行迁移或启用数据库代码时需要
+- pnpm 10 或更高版本
+- PostgreSQL（`DATABASE_URL` 配置）
+
+## 快速开始
 
 ```bash
 nvm use
-npm install
-cp .env.example .env
-npm run dev
+pnpm install
+cp .env.example .env        # 按需修改（DATABASE_URL、issuer、前端地址等）
+pnpm db:init                # 创建数据库 sso / sso_test（已存在则跳过）
+pnpm db:migrate             # 应用迁移
+pnpm db:seed                # 种子账号：admin(super) / demo(user)
+pnpm dev                    # http://127.0.0.1:4000
 ```
 
-默认访问地址：
+默认访问：
 
-- 服务信息：<http://127.0.0.1:4000/>
 - 健康检查：<http://127.0.0.1:4000/health>
 - OIDC Discovery：<http://127.0.0.1:4000/oidc/.well-known/openid-configuration>
 
-## 本地 OIDC 客户端
-
-开发环境内置一个用于联调的客户端：
-
-| 配置 | 值 |
-| --- | --- |
-| Client ID | `local-client` |
-| Client Secret | `local-client-secret` |
-| Redirect URI | `http://127.0.0.1:3000/callback` |
-| Grant Types | `authorization_code`, `refresh_token` |
-
-开发环境启用了 `oidc-provider` 自带的交互页面，可使用任意用户名和密码完成
-本地授权流程。PKCE 是必需的。生产环境会自动禁用该页面。
-
 ## 常用命令
 
-```bash
-npm run dev
-npm run typecheck
-npm run lint
-npm run build
-npm start
+| 命令 | 说明 |
+| --- | --- |
+| `pnpm dev` | 开发模式（tsx watch） |
+| `pnpm build` / `pnpm start` | 构建 / 运行产物 |
+| `pnpm typecheck` / `pnpm lint` | 类型检查 / 代码检查 |
+| `pnpm test` / `pnpm e2e` | 全部测试 / 端到端流程测试 |
+| `pnpm db:init` / `db:migrate` / `db:generate` | 初始化 / 迁移 / 生成迁移 |
+| `pnpm db:seed` | 写入种子账号 |
+| `pnpm user <cmd>` | 用户 CLI：create / set-role / set-password / disable / enable / list |
+| `pnpm db:cleanup` | 清理过期的 OIDC 运行时数据（建议定时任务每天执行） |
+
+## 关键流程（简要）
+
+1. 前端跳 `{issuer}/auth`（authorization_code + PKCE）
+2. 无会话时认证中心 302 到前端登录页（`LOGIN_UI_URL?interaction=uid`）
+3. 登录页 `POST /interaction/{uid}/login` 提交凭据 → 返回 `{redirectTo}`
+4. 浏览器继续授权流程 → 回跳前端 `redirect_uri?code=...`
+5. 前端直连 `POST /token` 换取 access / refresh / ID token
+6. 前端带 `Authorization: Bearer` 调业务 API（网关验签并注入身份头）
+
+## 对接文档
+
+- 前端仓库：[docs/frontend-integration.md](docs/frontend-integration.md)
+- 网关仓库：[docs/gateway-integration.md](docs/gateway-integration.md)
+- 方案与执行记录：[docs/auth-center-plan.md](docs/auth-center-plan.md)、[docs/implementation-plan.md](docs/implementation-plan.md)
+
+## 目录结构
+
+```
+src/
+├── app.ts / index.ts        # 组装与启动
+├── config/env.ts            # 环境配置（zod 校验）
+├── auth/                    # 登录交互、scrypt、角色等级
+├── oidc/                    # provider 配置、Drizzle 适配器、JWKS、客户端注册
+├── users/repository.ts      # 用户数据访问
+└── db/                      # 连接与表结构
+scripts/                     # init-db / seed / user CLI / cleanup
+test/                        # vitest：单元 + e2e
+drizzle/                     # 数据库迁移
 ```
 
-## 数据库
+## 安全说明
 
-当前服务启动时不会创建 PostgreSQL 连接。数据库工厂位于
-`src/db/client.ts`，只有显式调用 `createDatabase()` 后才会创建连接池。
-
-初始用户表定义位于 `src/db/schema.ts`。配置 `DATABASE_URL` 后可执行：
-
-```bash
-npm run db:generate
-npm run db:migrate
-npm run db:studio
-```
-
-当前 OIDC 数据使用 `oidc-provider` 的内存适配器，进程重启后会丢失。上线前
-需要实现持久化适配器、真实登录交互、密钥管理，并替换示例客户端凭据。
+- 口令使用 scrypt 哈希存储；登录失败按 IP+用户名限速（15 分钟 5 次）
+- access token 有效期 10 分钟；refresh token 与登录会话绑定、轮换签发；
+  重放旧 refresh token 会触发泄露检测并撤销整条授权
+- 生产环境必须配置 `NODE_ENV=production`、HTTPS、独立的 `OIDC_COOKIE_KEYS`
+  与随机签名密钥（`JWKS_PATH` 或挂载密钥文件）
+- 独立入口部署：生产建议前置自有 LB/WAF 承担 TLS，保留 `TRUST_PROXY=1`
+  并限制服务端口只允许 LB 访问（防止伪造转发头影响登录限速）
+- 数据库凭据只保存在本地 `.env`（已被 gitignore）
