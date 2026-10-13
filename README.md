@@ -39,6 +39,7 @@ pnpm dev                    # http://127.0.0.1:4000
 默认访问：
 
 - 健康检查：<http://127.0.0.1:4000/health>
+- 就绪检查（含数据库连通性）：<http://127.0.0.1:4000/health/ready>
 - OIDC Discovery：<http://127.0.0.1:4000/oidc/.well-known/openid-configuration>
 
 ## 常用命令
@@ -67,6 +68,7 @@ pnpm dev                    # http://127.0.0.1:4000
 
 - 前端仓库：[docs/frontend-integration.md](docs/frontend-integration.md)
 - 网关仓库：[docs/gateway-integration.md](docs/gateway-integration.md)
+- 部署与发布：[docs/deployment.md](docs/deployment.md)
 - 方案与执行记录：[docs/auth-center-plan.md](docs/auth-center-plan.md)、[docs/implementation-plan.md](docs/implementation-plan.md)
 
 ## 目录结构

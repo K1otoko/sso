@@ -4,6 +4,7 @@ import express, {
   type RequestHandler,
 } from 'express';
 import cors from 'cors';
+import { sql } from 'drizzle-orm';
 
 import { createInteractionRouter } from './auth/interaction.js';
 import type { AppConfig } from './config/env.js';
@@ -54,6 +55,17 @@ export function createApp({ config, database, users }: AppDependencies): Express
 
   app.get('/health', (_request, response) => {
     response.json({ status: 'ok' });
+  });
+
+  // 就绪检查：数据库连通性（供容器健康检查 / 发布门禁使用；/health 仅代表进程存活）
+  app.get('/health/ready', async (_request, response) => {
+    try {
+      await database.execute(sql`select 1`);
+      response.json({ status: 'ready' });
+    } catch (error) {
+      console.error('readiness check failed', error);
+      response.status(503).json({ status: 'unavailable' });
+    }
   });
 
   app.use(express.json({ limit: '100kb' }));

@@ -316,3 +316,11 @@ describe('认证全流程（授权码 + PKCE）', () => {
     expect((response.body as { error: string }).error).toBe('interaction_expired');
   });
 });
+
+describe('健康检查', () => {
+  it('就绪探针 /health/ready 在数据库可用时返回 ready', async () => {
+    const response = await request(context.app).get('/health/ready');
+    expect(response.status).toBe(200);
+    expect((response.body as { status: string }).status).toBe('ready');
+  });
+});

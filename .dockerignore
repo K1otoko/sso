@@ -1,0 +1,13 @@
+.git
+.github
+.env
+.env.*
+.image.env
+node_modules
+dist
+coverage
+test
+docs
+secrets
+*.log
+.DS_Store
