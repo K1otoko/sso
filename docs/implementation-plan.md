@@ -131,7 +131,7 @@ src/
 │   └── login-rate-limit.ts   # 登录失败限速（内存计数）
 ├── auth/
 │   ├── password.ts           # scrypt 哈希 / 校验
-│   └── interaction.ts        # GET /interaction/:uid、POST /interaction/:uid/login
+│   └── interaction.ts        # GET/POST /api/sso/interaction/:uid
 ├── oidc/
 │   ├── provider.ts           # JWT access token、claims、interactionPolicy、TTL
 │   ├── adapter.ts            # Drizzle 持久化适配器（oidc_payloads）
@@ -153,29 +153,29 @@ test/                         # vitest：单元 / 集成 / e2e 冒烟
 | 变量 | 本轮值 | 说明 |
 | --- | --- | --- |
 | `NODE_ENV` | `development` | |
-| `HOST` / `PORT` | `127.0.0.1` / `4000` | 开发默认；生产绑定 0.0.0.0 / 容器网卡，经自有 LB/WAF 对外（独立入口） |
-| `OIDC_ISSUER` | `http://127.0.0.1:4000/oidc` | 生产换成认证中心自己的公网域名 |
+| `HOST` / `PORT` | `127.0.0.1` / `4000` | 开发默认；生产容器监听 4000，由宿主机 `127.0.0.1:4400` 转给后端 Nginx |
+| `OIDC_ISSUER` | `http://127.0.0.1:4000/api/sso/oidc` | 生产使用前端公网域名下的相同路径 |
 | `OIDC_COOKIE_KEYS` | 本地随机生成 | 生产必填 |
 | `DATABASE_URL` | 见 .env（真实库） | 口令 URL 编码 |
 | `LOGIN_UI_URL` | `http://127.0.0.1:5173/login` | 前端登录页（占位默认） |
 | `CORS_ORIGINS` | `http://127.0.0.1:5173` | 前端 origin 白名单（占位默认） |
 | `WEB_CLIENT_REDIRECT_URIS` | `http://127.0.0.1:5173/callback` | 前端回跳白名单（占位默认） |
 | `JWKS_PATH` | `./secrets/jwks.json` | 开发密钥落盘（gitignore） |
-| `TRUST_PROXY` | `1` | 前置自有 LB/WAF 时按第一跳信任转发头；需限制端口只允许 LB 访问 |
+| `TRUST_PROXY` | `2` | 生产经过前端、后端两层 Nginx；服务端口仅允许后端 Nginx 访问 |
 
 ### 2.3 端点清单
 
 | 端点 | 用途 | CORS |
 | --- | --- | --- |
 | `GET /health` | 健康检查 | – |
-| `GET /oidc/.well-known/openid-configuration` | discovery | – |
-| `GET /oidc/jwks` | 公钥（网关 / 服务验签） | – |
-| `GET /oidc/auth` | 授权入口（授权码 + PKCE） | – |
-| `POST /oidc/token` | 换令牌 / 刷新 | 白名单 |
-| `GET /oidc/me` | userinfo —— **本轮关闭**（前端从 ID token 读 claims） | – |
-| `GET /oidc/session/end` | 登出 | – |
-| `GET /interaction/:uid` | 已登录继续流程；否则 302 到前端登录页 | – |
-| `POST /interaction/:uid/login` | 提交凭据，返回 `{redirectTo}` | 白名单 |
+| `GET /api/sso/oidc/.well-known/openid-configuration` | discovery | – |
+| `GET /api/sso/oidc/jwks` | 公钥（网关 / 服务验签） | – |
+| `GET /api/sso/oidc/auth` | 授权入口（授权码 + PKCE） | – |
+| `POST /api/sso/oidc/token` | 换令牌 / 刷新 | 白名单 |
+| `GET /api/sso/oidc/me` | userinfo —— **本轮关闭**（前端从 ID token 读 claims） | – |
+| `GET /api/sso/oidc/session/end` | 登出 | – |
+| `GET /api/sso/interaction/:uid` | 已登录继续流程；否则 302 到前端登录页 | – |
+| `POST /api/sso/interaction/:uid/login` | 提交凭据，返回 `{redirectTo}` | 白名单 |
 
 ### 2.4 关键机制
 
@@ -194,10 +194,12 @@ test/                         # vitest：单元 / 集成 / e2e 冒烟
 ### 2.5 登录流程（与 v0.5 一致，简述）
 
 1. 前端跳 `{issuer}/auth`（PKCE）→ 认证中心无会话 → 302 到 `{LOGIN_UI_URL}?interaction={uid}`
-2. 前端登录页 `POST {issuer}/interaction/{uid}/login`（限速 + scrypt 校验）
+2. 前端登录页 `POST {issuerOrigin}/api/sso/interaction/{uid}/login`（限速 + scrypt 校验）
 3. 认证中心建会话、返回 `{redirectTo}`；前端跳回 → 认证中心签发 code
-4. 浏览器落回前端 `redirect_uri?code=...`；前端直连 `POST /oidc/token` 换令牌
-5. 前端带 `Authorization: Bearer` 调业务 API（网关验签 + 注入身份头）
+4. 浏览器落回前端 `redirect_uri?code=...`；前端直连
+   `POST /api/sso/oidc/token` 换令牌
+5. 前端带 `Authorization: Bearer` 调 `/api/gateway/**`
+   （网关验签 + 注入身份头）
 
 ### 2.6 单点登录（SSO）说明
 
@@ -237,8 +239,8 @@ test/                         # vitest：单元 / 集成 / e2e 冒烟
 
 - 数据库：`sso` / `sso_test` 已创建（82.157.56.196，PostgreSQL 18.6）；
   两张表迁移完成；种子账号 `admin`(super) / `demo`(user)。
-- 登录：`GET /interaction/:uid`（跳前端登录页；已有会话直接续跑）+
-  `POST /interaction/:uid/login`（scrypt 校验、限速、统一错误文案）。
+- 登录：`GET /api/sso/interaction/:uid`（跳前端登录页；已有会话直接续跑）+
+  `POST /api/sso/interaction/:uid/login`（scrypt 校验、限速、统一错误文案）。
 - 令牌：JWT access token（ES256、`aud=urn:sso:api`、`role`/`username`/`token_use`）；
   ID token 带 `role`；refresh 会话绑定 + 轮换 + 重放检测。
 - 持久化：Drizzle 适配器（`oidc_payloads`），认证中心重启不掉登录态。
@@ -283,11 +285,12 @@ test/                         # vitest：单元 / 集成 / e2e 冒烟
 
 ### 6.1 关键风险：自举依赖（升级工具的登录依赖被升级对象）
 
-现状组合：单实例 + 运维平台登录走认证中心 + 认证中心为独立入口（不经网关）。
+现状组合：单实例 + 运维平台登录走认证中心 + `/api/sso/**` 由 Nginx
+直接路由到认证中心（不进入 Gateway 应用）。
 
 ⟹ **升级认证中心期间**：运维平台无法完成新登录（认证链路被切断）；
-若升级失败需要回滚时正好登不进去，会形成死锁。升级**网关**不再影响登录
-（认证中心独立入口）。
+若升级失败需要回滚时正好登不进去，会形成死锁。升级 **Gateway 应用**不影响
+登录，因为 Nginx 会绕过 Gateway 处理 `/api/sso/**`。
 已登录的管理员能撑多久，取决于运维平台会话设计：若「登录一次后靠自身会话 +
 缓存公钥离线验签」，可撑过升级窗口；若每次请求回调认证中心，升级瞬间全部登出。
 
@@ -295,13 +298,13 @@ test/                         # vitest：单元 / 集成 / e2e 冒烟
 
 1. **运维平台本地兜底登录（break-glass）**：不经认证中心的管理员登录通道，
    仅限管理员网络 / 堡垒机。管 IdP 的工具不能 100% 依赖 IdP 自身。
-2. **认证中心的管理员可达性**：认证中心为独立入口（自有公网域名，运维侧也可经
-   VPN / 专网直达）；运维平台的 SSO 跳转与后端调用走此路径。
+2. **认证中心的管理员可达性**：前后端 Nginx 保留 `/api/sso/**` 直达路由，
+   运维侧也可准备 VPN / 专网兜底路径。
 3. **运维平台验签离线化**：JWT 用缓存 JWKS 本地验签，登录后依赖自身会话，
    不在每个请求上回调认证中心。
 
-拓扑决定（已确认）：认证中心与运维平台为基础设施平面、各自独立入口，
-不经业务网关；网关只承载业务流量。接入要求即上面第 1–3 条。
+拓扑决定（已确认）：认证中心使用前端公网域名下的 `/api/sso/**` 路径，
+经两层 Nginx 直达且不进入 Gateway 应用；接入要求即上面第 1–3 条。
 
 升级操作建议：单实例意味着每次升级都有中断窗口——升级前先验证兜底登录与
 回滚路径可用；发布任务在平台服务端执行，不依赖升级期间保持 UI 登录态。

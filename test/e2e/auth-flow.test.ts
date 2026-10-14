@@ -4,9 +4,10 @@ import { createLocalJWKSet, decodeJwt, jwtVerify } from 'jose';
 import request from 'supertest';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { INTERACTION_PATH, OIDC_PATH } from '../../src/config/paths.js';
 import { createTestContext, ensureUser, type TestContext } from '../helpers/test-context.js';
 
-const ISSUER = 'http://127.0.0.1:4000/oidc';
+const ISSUER = `http://127.0.0.1:4000${OIDC_PATH}`;
 const REDIRECT_URI = 'http://127.0.0.1:5173/callback';
 const FRONTEND_ORIGIN = 'http://127.0.0.1:5173';
 const CLIENT_ID = 'web';
@@ -51,14 +52,14 @@ async function beginAuthorization(
 ): Promise<{ verifier: string; interactionPath: string }> {
   const { verifier, challenge } = createPkce();
   const response = await agent
-    .get('/oidc/auth')
+    .get(`${OIDC_PATH}/auth`)
     .query(authorizationQuery(challenge, state))
     .expect(303);
 
   const location = response.headers.location;
   expect(location).toBeDefined();
   const interactionPath = new URL(location as string, ISSUER).pathname;
-  expect(interactionPath.startsWith('/interaction/')).toBe(true);
+  expect(interactionPath.startsWith(`${INTERACTION_PATH}/`)).toBe(true);
   return { verifier, interactionPath };
 }
 
@@ -129,7 +130,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 6. 换令牌
     const tokenResponse = await agent
-      .post('/oidc/token')
+      .post(`${OIDC_PATH}/token`)
       .type('form')
       .send({
         grant_type: 'authorization_code',
@@ -150,7 +151,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
     expect(typeof tokens.refresh_token).toBe('string');
 
     // 7. access token 是 JWT，且可用 JWKS 离线验签
-    const jwksResponse = await request(context.app).get('/oidc/jwks').expect(200);
+    const jwksResponse = await request(context.app).get(`${OIDC_PATH}/jwks`).expect(200);
     const keySet = createLocalJWKSet(
       jwksResponse.body as Parameters<typeof createLocalJWKSet>[0],
     );
@@ -170,7 +171,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 9. refresh 轮换：拿到新的 refresh token（旧令牌的"重放拒绝"在下一个测试单独验证）
     const refreshed = await agent
-      .post('/oidc/token')
+      .post(`${OIDC_PATH}/token`)
       .type('form')
       .send({ grant_type: 'refresh_token', refresh_token: tokens.refresh_token, client_id: CLIENT_ID })
       .expect(200);
@@ -180,7 +181,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
     // 10. SSO：同一登录会话再次授权 → 不再出现登录页，直接发码
     const { challenge } = createPkce();
     const ssoAuthorize = await agent
-      .get('/oidc/auth')
+      .get(`${OIDC_PATH}/auth`)
       .query(authorizationQuery(challenge, 'e2e-state-sso'));
     expect([302, 303]).toContain(ssoAuthorize.status);
     const ssoCallback = new URL(ssoAuthorize.headers.location as string, ISSUER);
@@ -190,13 +191,13 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 11. 登出：确认页 → POST confirm → 回跳 post_logout_redirect_uri
     const endSession = await agent
-      .get('/oidc/session/end')
+      .get(`${OIDC_PATH}/session/end`)
       .query({ client_id: CLIENT_ID, post_logout_redirect_uri: 'http://127.0.0.1:5173/' })
       .expect(200);
     const xsrf = /name="xsrf" value="([^"]+)"/.exec(endSession.text)?.[1];
     expect(xsrf).toBeDefined();
     const confirmed = await agent
-      .post('/oidc/session/end/confirm')
+      .post(`${OIDC_PATH}/session/end/confirm`)
       .type('form')
       .send({ xsrf: xsrf as string, logout: 'yes' });
     expect([302, 303]).toContain(confirmed.status);
@@ -204,7 +205,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 12. 登出后 refresh 失效
     await agent
-      .post('/oidc/token')
+      .post(`${OIDC_PATH}/token`)
       .type('form')
       .send({
         grant_type: 'refresh_token',
@@ -215,7 +216,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 13. 登出后再次授权 → 需要重新登录
     const afterLogout = await agent
-      .get('/oidc/auth')
+      .get(`${OIDC_PATH}/auth`)
       .query(authorizationQuery(createPkce().challenge, 'e2e-state-after-logout'))
       .expect(303);
     const nextInteractionPath = new URL(afterLogout.headers.location as string, ISSUER).pathname;
@@ -239,7 +240,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
     );
     const tokens = (
       await agent
-        .post('/oidc/token')
+        .post(`${OIDC_PATH}/token`)
         .type('form')
         .send({
           grant_type: 'authorization_code',
@@ -254,7 +255,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
     // 正常轮换一次
     const rotated = (
       await agent
-        .post('/oidc/token')
+        .post(`${OIDC_PATH}/token`)
         .type('form')
         .send({
           grant_type: 'refresh_token',
@@ -267,7 +268,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 重放已经被轮换掉的旧 refresh token → 400，且触发泄露检测
     await agent
-      .post('/oidc/token')
+      .post(`${OIDC_PATH}/token`)
       .type('form')
       .send({
         grant_type: 'refresh_token',
@@ -278,7 +279,7 @@ describe('认证全流程（授权码 + PKCE）', () => {
 
     // 泄露检测：整条授权的令牌全部作废（连最新的 refresh token 也不可用）
     await agent
-      .post('/oidc/token')
+      .post(`${OIDC_PATH}/token`)
       .type('form')
       .send({
         grant_type: 'refresh_token',

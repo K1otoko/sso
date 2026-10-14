@@ -4,6 +4,7 @@ import type Provider from 'oidc-provider';
 import { z } from 'zod';
 
 import type { AppConfig } from '../config/env.js';
+import { INTERACTION_PATH } from '../config/paths.js';
 import { LoginRateLimiter } from '../middleware/login-rate-limit.js';
 import { FIRST_PARTY_CLIENT_IDS } from '../oidc/clients.js';
 import type { UsersRepository } from '../users/repository.js';
@@ -29,16 +30,16 @@ export interface InteractionDependencies {
 
 /**
  * 登录交互 API（登录页面由前端仓库实现）：
- * - GET  /interaction/:uid        未登录 → 302 到前端登录页；已登录 → 直接完成登录步骤
- * - POST /interaction/:uid/login  提交凭据（限速 + scrypt 校验），返回 { redirectTo }
- * - GET  /interaction/:uid        授权确认（consent）：首方客户端自动通过
+ * - GET  /api/sso/interaction/:uid        未登录 → 302 到前端登录页；已登录 → 直接完成登录步骤
+ * - POST /api/sso/interaction/:uid/login  提交凭据（限速 + scrypt 校验），返回 { redirectTo }
+ * - GET  /api/sso/interaction/:uid        授权确认（consent）：首方客户端自动通过
  */
 export function createInteractionRouter(deps: InteractionDependencies): Router {
   const { provider, users, config } = deps;
   const limiter = deps.rateLimiter ?? new LoginRateLimiter();
   const router = Router();
 
-  router.get('/interaction/:uid', async (request, response, next) => {
+  router.get(`${INTERACTION_PATH}/:uid`, async (request, response, next) => {
     try {
       const details = await provider.interactionDetails(request, response);
       const promptName = details.prompt.name;
@@ -84,7 +85,7 @@ export function createInteractionRouter(deps: InteractionDependencies): Router {
     }
   });
 
-  router.post('/interaction/:uid/login', async (request, response, next) => {
+  router.post(`${INTERACTION_PATH}/:uid/login`, async (request, response, next) => {
     try {
       const details = await provider.interactionDetails(request, response);
       if (details.prompt.name !== 'login') {

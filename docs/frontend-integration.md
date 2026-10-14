@@ -1,21 +1,25 @@
 # 前端对接文档（SSO 认证中心）
 
 > 适用：前端仓库（独立开发）。登录页面由前端实现，认证中心提供交互 API。
-> 联调环境默认值：issuer = `http://127.0.0.1:4000/oidc`，前端 origin = `http://127.0.0.1:5173`。
-> 认证中心为基础设施独立入口：issuer 就是认证中心自己的地址（生产为其公网域名），
-> 登录链路不经过业务网关。
+> 联调环境默认值：issuer = `http://127.0.0.1:4000/api/sso/oidc`，前端 origin = `http://127.0.0.1:5173`。
+> 生产环境中，前端 Nginx 将 `/api/**` 转发到后端 Nginx，后端再将
+> `/api/sso/**` 路由到认证中心。
 
 ## 1. 基本信息
 
 | 项 | 值 |
 | --- | --- |
-| issuer | `http://127.0.0.1:4000/oidc` |
+| issuer | `http://127.0.0.1:4000/api/sso/oidc` |
 | discovery | `{issuer}/.well-known/openid-configuration` |
+| 交互 API | `{issuerOrigin}/api/sso/interaction/{uid}` |
 | client_id | `web`（public client，无 client_secret） |
 | 授权类型 | `authorization_code` + PKCE（S256，必需） |
 | scope | `openid profile email` |
 | 回跳地址 | `http://127.0.0.1:5173/callback`（白名单；改地址需在认证中心 .env 登记） |
 | 登出回跳 | `http://127.0.0.1:5173/`（post_logout_redirect_uri，白名单） |
+
+`issuerOrigin` 表示 issuer 的 origin；本地为 `http://127.0.0.1:4000`，
+生产反向代理部署时为前端公网 origin。
 
 ## 2. 登录流程
 
@@ -39,7 +43,7 @@
 3. **提交凭据**（登录页 JS，`fetch` + `credentials: 'include'`）：
 
    ```
-   POST {issuer}/interaction/{uid}/login
+   POST {issuerOrigin}/api/sso/interaction/{uid}/login
    Content-Type: application/json
    { "username": "...", "password": "..." }
    ```
@@ -61,7 +65,8 @@
    grant_type=authorization_code&code=...&redirect_uri=...&client_id=web&code_verifier=...
    ```
 
-6. **调用业务 API**：`Authorization: Bearer <access_token>`（经网关）。
+6. **调用业务 API**：请求 `/api/gateway/**` 并携带
+   `Authorization: Bearer <access_token>`。
 
 > 提示：可以直接使用现成库（如 `oidc-client-ts`），配置 issuer / client_id /
 > redirect_uri / scope；登录页按第 3 步对接交互接口。
@@ -103,7 +108,7 @@ GET {issuer}/session/end?client_id=web&post_logout_redirect_uri=http://127.0.0.1
 
 以下端点已对前端 origin 白名单放行（请求需带凭据）：
 
-- `POST {issuer}/interaction/{uid}/login`
+- `POST {issuerOrigin}/api/sso/interaction/{uid}/login`
 - `POST {issuer}/token`
 
 新增前端域名时，在认证中心 `.env` 的 `CORS_ORIGINS` /

@@ -44,17 +44,20 @@
 
 ```
 NODE_ENV=production
-OIDC_ISSUER=https://<认证中心公网域名>/oidc
+OIDC_ISSUER=https://<前端公网域名>/api/sso/oidc
 DATABASE_URL=postgresql://...
 OIDC_COOKIE_KEYS=<随机长字符串,随机长字符串>
 LOGIN_UI_URL=https://<前端域名>/login
 CORS_ORIGINS=https://<前端域名>
 WEB_CLIENT_REDIRECT_URIS=https://<前端域名>/callback
 API_RESOURCE=urn:sso:api
+TRUST_PROXY=2
+SSO_BIND_ADDRESS=127.0.0.1
+SSO_PORT=4400
 ```
 
 可选覆盖：`SSO_BIND_ADDRESS`（默认 `127.0.0.1`）、`SSO_PORT`（默认 `4000`）、
-`TRUST_PROXY`（默认 `1`）、`SECRETS_PATH`（默认 `./secrets`）。
+`TRUST_PROXY`（Compose 默认 `2`）、`SECRETS_PATH`（默认 `./secrets`）。
 
 ## 4. 数据库迁移
 
@@ -74,16 +77,61 @@ API_RESOURCE=urn:sso:api
 - 部署机器上需要已登录 ACR，容器才能拉取私有镜像
 - 本仓库分支必须是 `master`（或在 workflow 里改触发分支）
 
-## 7. nginx 反向代理（当前生产拓扑）
+## 7. Nginx 反向代理（当前生产拓扑）
 
-- **对外入口**：`http://82.157.201.240:4000`（nginx），与 gateway 同机不同端口
-- **配置归档**：[deploy/nginx/sso.conf](../deploy/nginx/sso.conf)；
-  服务器上位于 `/project/sso/nginx/sso.conf`，
-  软链到 `/etc/nginx/sites-enabled/sso`（nginx -t 后 reload 生效）
-- **上游**：`http://127.0.0.1:4400` —— 服务端 `.env` 中 `SSO_PORT=4400`，
-  把 4000 端口让给 nginx；compose 默认值（4000）不受影响
-- **关键细节**：`proxy_set_header Host $http_host` 必须保留端口，
-  否则 discovery 与授权跳转地址会缺少 `:4000`（`$host` 会丢端口）
-- **Cookie**：`Secure` 属性跟随 `OIDC_ISSUER` 协议——纯 HTTP 阶段自动关闭
-  （否则 koa 发 cookie 会抛错、登录接口全部 500）；将来换
-  `https://<域名>/oidc` + TLS 后会自行启用
+- **公开路径**：`https://<前端域名>/api/sso/**`
+- **前端 Nginx**：将全部 `/api/**` 原样转发到后端服务器的 Nginx
+- **后端 Nginx**：只监听 `80`；优先将 `/api/sso/**` 转发到
+  `http://127.0.0.1:4400`，将 `/api/gateway/**` 交给 Gateway
+- **配置归档**：[deploy/nginx/sso.conf](../deploy/nginx/sso.conf) 是
+  `location` 路由片段，必须包含在后端统一的 `server { listen 80; }` 中，
+  不能单独软链到 `sites-enabled`
+- **路径要求**：`proxy_pass` 后不能添加 `/`，否则会移除
+  `/api/sso/` 前缀，导致 issuer 与实际端点不一致
+- **代理信任**：请求经过前端和后端两层 Nginx，因此使用
+  `TRUST_PROXY=2`
+- **Cookie**：`Secure` 属性跟随 `OIDC_ISSUER` 的 HTTPS 协议自动启用
+
+后端 `80` 通过公网接收前端 Nginx 流量时，必须在安全组中仅允许前端服务器
+公网 IP。该限制不提供链路加密，生产环境仍建议为两台服务器之间增加 HTTPS
+回源或加密隧道。
+
+前端 Nginx 的转发必须保留 `/api` 路径和公网协议信息：
+
+```nginx
+location ^~ /api/ {
+    # 结尾不能添加 `/`
+    proxy_pass http://<后端公网 IP>;
+    proxy_set_header Host $http_host;
+    proxy_set_header X-Forwarded-Host $http_host;
+    proxy_set_header X-Forwarded-Proto $scheme;
+    proxy_set_header X-Forwarded-Port $server_port;
+    proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+}
+```
+
+后端统一站点为 SSO 与 Gateway 使用互不重叠的明确前缀：
+
+```nginx
+server {
+    listen 80;
+    server_name _;
+
+    allow <前端服务器公网 IP>;
+    deny all;
+
+    include /project/sso/nginx/sso.conf;
+
+    location = /api/gateway {
+        return 308 /api/gateway/;
+    }
+
+    location ^~ /api/gateway/ {
+        proxy_pass http://127.0.0.1:<Gateway 端口>;
+    }
+
+    location / {
+        return 404;
+    }
+}
+```

@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+import { OIDC_PATH } from './paths.js';
+
 const developmentCookieKeys = [
   'development-cookie-key-change-before-deploying-1',
   'development-cookie-key-change-before-deploying-2',
@@ -9,6 +11,17 @@ const developmentLoginUiUrl = 'http://127.0.0.1:5173/login';
 const developmentCorsOrigins = 'http://127.0.0.1:5173';
 const developmentRedirectUris = 'http://127.0.0.1:5173/callback';
 const defaultApiResource = 'urn:sso:api';
+
+const oidcIssuerSchema = z.url().refine(
+  (value) => {
+    const url = new URL(value);
+    const pathname = url.pathname.replace(/\/+$/, '');
+    return pathname === OIDC_PATH && url.search === '' && url.hash === '';
+  },
+  {
+    message: `OIDC_ISSUER must use the ${OIDC_PATH} path without query or fragment`,
+  },
+);
 
 function splitCommaList(value: string): string[] {
   return value
@@ -24,7 +37,7 @@ const environmentSchema = z
       .default('development'),
     HOST: z.string().min(1).default('127.0.0.1'),
     PORT: z.coerce.number().int().min(1).max(65_535).default(4000),
-    OIDC_ISSUER: z.url().optional(),
+    OIDC_ISSUER: oidcIssuerSchema.optional(),
     OIDC_COOKIE_KEYS: z.string().optional(),
     DATABASE_URL: z.url().optional(),
     TEST_DATABASE_URL: z.url().optional(),
@@ -33,7 +46,7 @@ const environmentSchema = z
     WEB_CLIENT_REDIRECT_URIS: z.string().default(developmentRedirectUris),
     JWKS_PATH: z.string().min(1).default('./secrets/jwks.json'),
     API_RESOURCE: z.string().min(1).default(defaultApiResource),
-    TRUST_PROXY: z.string().default('1'),
+    TRUST_PROXY: z.string().default('false'),
   })
   .superRefine((environment, context) => {
     if (
@@ -77,7 +90,7 @@ export interface AppConfig {
 /**
  * TRUST_PROXY 取值：
  * - "false"：不信任任何代理（直连部署）
- * - 数字：信任前 N 跳（前置自有 LB/WAF 时用 1，且限制服务端口只允许 LB 访问）
+ * - 数字：信任前 N 跳（当前生产链路前端 + 后端 Nginx 共 2 跳）
  * - 其他字符串：按 express trust proxy 规则原样传入（如 IP/CIDR）
  */
 function parseTrustProxy(value: string): boolean | number | string {
@@ -101,7 +114,7 @@ export function loadConfig(environment: NodeJS.ProcessEnv = process.env): AppCon
     port: parsed.PORT,
     oidcIssuer:
       parsed.OIDC_ISSUER ??
-      `http://${parsed.HOST}:${String(parsed.PORT)}/oidc`,
+      `http://${parsed.HOST}:${String(parsed.PORT)}${OIDC_PATH}`,
     oidcCookieKeys:
       configuredCookieKeys === undefined || configuredCookieKeys.length === 0
         ? developmentCookieKeys

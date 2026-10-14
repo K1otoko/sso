@@ -8,6 +8,7 @@ import { sql } from 'drizzle-orm';
 
 import { createInteractionRouter } from './auth/interaction.js';
 import type { AppConfig } from './config/env.js';
+import { OIDC_PATH } from './config/paths.js';
 import type { Database } from './db/client.js';
 import { loadOrCreateJwks } from './oidc/jwks.js';
 import { createOidcProvider } from './oidc/provider.js';
@@ -23,13 +24,10 @@ export function createApp({ config, database, users }: AppDependencies): Express
   const app = express();
   const jwks = loadOrCreateJwks(config.jwksPath);
   const oidc = createOidcProvider({ config, database, users, jwks });
-  const issuerUrl = new URL(config.oidcIssuer);
-  const oidcMountPath =
-    issuerUrl.pathname === '/' ? '/' : issuerUrl.pathname.replace(/\/$/, '');
 
   app.disable('x-powered-by');
-  // 独立入口部署：前置自有 LB/WAF 时按第一跳信任 X-Forwarded-For（限速取真实客户端 IP）；
-  // 生产需限制服务端口只允许 LB 访问，避免伪造转发头。
+  // 生产链路包含前端与后端两层 Nginx，按实际代理跳数信任转发头；
+  // 服务端口必须只允许最后一层 Nginx 访问，避免伪造转发头。
   app.set('trust proxy', config.trustProxy);
 
   app.use(
@@ -72,7 +70,7 @@ export function createApp({ config, database, users }: AppDependencies): Express
 
   app.use(createInteractionRouter({ provider: oidc, users, config }));
 
-  app.use(oidcMountPath, oidc.callback() as RequestHandler);
+  app.use(OIDC_PATH, oidc.callback() as RequestHandler);
 
   app.use((_request, response) => {
     response.status(404).json({ error: 'not_found' });

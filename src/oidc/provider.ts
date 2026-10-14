@@ -1,6 +1,7 @@
 import Provider, { errors, type Configuration } from 'oidc-provider';
 
 import type { AppConfig } from '../config/env.js';
+import { INTERACTION_PATH } from '../config/paths.js';
 import type { Database } from '../db/client.js';
 import type { UsersRepository } from '../users/repository.js';
 import { createAdapterFactory } from './adapter.js';
@@ -58,7 +59,7 @@ export function createOidcProvider(deps: OidcProviderDependencies): Provider {
       },
     },
     features: {
-      // 登录页面由前端仓库实现，认证中心通过 /interaction 提供交互 API
+      // 登录页面由前端仓库实现，认证中心通过 /api/sso/interaction 提供交互 API
       devInteractions: { enabled: false },
       // 关闭 userinfo：access token 为带 aud 的 JWT（供网关/服务离线验签），
       // 本就与 userinfo 端点不兼容；前端从 ID token 读取身份 claims。
@@ -79,6 +80,9 @@ export function createOidcProvider(deps: OidcProviderDependencies): Provider {
           };
         },
       },
+    },
+    interactions: {
+      url: (_ctx, interaction) => `${INTERACTION_PATH}/${interaction.uid}`,
     },
     findAccount: async (_ctx, id) => {
       const user = await users.findById(id);

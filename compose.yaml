@@ -17,7 +17,7 @@ services:
       WEB_CLIENT_REDIRECT_URIS: "${WEB_CLIENT_REDIRECT_URIS:?WEB_CLIENT_REDIRECT_URIS is required}"
       API_RESOURCE: "${API_RESOURCE:-urn:sso:api}"
       JWKS_PATH: /app/secrets/jwks.json
-      TRUST_PROXY: "${TRUST_PROXY:-1}"
+      TRUST_PROXY: "${TRUST_PROXY:-2}"
     ports:
       - "${SSO_BIND_ADDRESS:-127.0.0.1}:${SSO_PORT:-4000}:4000"
     extra_hosts:

@@ -29,15 +29,15 @@
 ## 2. 边界与角色
 
 - 本仓库唯一产物：SSO 认证中心（`sso-server`，Express 5 + oidc-provider + PostgreSQL）。
-- 网关（Fastify，独立仓库）：**业务流量**的唯一公网入口；对 `/api/**` 校验用户令牌并
-  注入身份头（不再代理 `/oidc`、`/interaction`）。
+- 网关（Fastify，独立仓库）：处理 `/api/gateway/**` 业务流量，校验用户令牌
+  并注入身份头；`/api/sso/**` 由后端 Nginx 分流到认证中心。
 - 前端（独立仓库）：OIDC 客户端 `web`（授权码 + PKCE）+ **自建登录页**；
   登录页通过认证中心登录 API 提交凭据；浏览器直连 token 端点换令牌（SPA 直连，已确认）。
 - 其他后端服务（独立仓库）：本轮仅作为用户令牌的最终消费方（经网关接收身份头）；
   服务间认证下一轮实现。
-- 认证中心为基础设施平面、**独立入口**：issuer 使用自己的地址（开发
-  `http://127.0.0.1:4000/oidc`；生产换为其公网域名），不经业务网关
-  （`OIDC_ISSUER` 可配；`proxy = true` 已启用，便于前置自有 LB/WAF）。
+- 认证中心公开路径固定为 `/api/sso/**`：issuer 开发值为
+  `http://127.0.0.1:4000/api/sso/oidc`，生产使用前端公网域名下的同一路径；
+  请求由前后端 Nginx 转发，但不经过 Gateway 应用。
 - 本地开发建议前端与认证中心使用同一 host（都用 `127.0.0.1`，端口不同视为同站），
   否则 Cookie 会按跨站规则处理。
 
@@ -59,26 +59,28 @@
 
 ```
  前端(独立仓库)
-   │ ① 登录跳转 / 提交凭据 ───────────────▶ SSO 认证中心(本仓库, 独立入口)
+   │ ① 登录跳转 / 提交凭据 ───────────────▶ 前端 Nginx → 后端 Nginx
+   │                                                   └─ /api/sso/** → SSO 认证中心
    │                                        登录 API · token 端点 · JWKS
    │ ② 业务请求（Authorization: Bearer）
    ▼
- Gateway (Fastify, 独立仓库, 业务流量唯一公网入口)
-   └─ /api/**（验签 + 注入 X-User-*）─────▶ 业务服务(各自独立仓库, 内网)
+ Gateway (Fastify, 独立仓库)
+   └─ /api/gateway/**（验签 + 注入 X-User-*）──▶ 业务服务(各自独立仓库, 内网)
 ```
 
-- 认证中心作为基础设施平面独立入口：issuer 为其自有公网域名；前置自有 LB/WAF 时
-  正确转发 `Host` 与 `X-Forwarded-Proto/For`（`proxy = true` 已启用）。
-- 网关只承载业务流量；认证中心与运维平台各自独立入口，不经网关。
+- 前端 Nginx 将 `/api/**` 转到后端 Nginx；后端 Nginx 将
+  `/api/sso/**` 交给认证中心，将 `/api/gateway/**` 交给 Gateway。
+- 两层代理均需正确传递 `Host` 与 `X-Forwarded-Proto/For`。
 
 ## 5. 登录流程（授权码 + PKCE，前端自建登录页）
 
 1. 前端把浏览器重定向到 `GET {issuer}/auth?...`（client_id=web，带 PKCE challenge）。
-2. 网关转发到认证中心；认证中心检查会话 cookie。
+2. 前端与后端 Nginx 转发到认证中心；认证中心检查会话 cookie。
 3. 无会话 → 认证中心 302 到前端登录页：`{LOGIN_UI_URL}?interaction={uid}`
    （uid 短时有效、不可猜测）。
 4. 前端登录页收集用户名密码，浏览器直接提交：
-   `POST {issuer}/interaction/{uid}/login`（JSON；CORS 白名单 + 携带凭据）。
+   `POST {issuerOrigin}/api/sso/interaction/{uid}/login`
+   （JSON；CORS 白名单 + 携带凭据）。
    认证中心执行 scrypt 校验 + 限速（按 IP / 用户名），成功后建立会话 cookie
    （认证中心域），返回 `{ redirectTo }`（下一步要继续的地址）。
 5. **前端登录页执行跳转**：`location.href = redirectTo`；浏览器回到认证中心后，
@@ -136,8 +138,8 @@ code 必须由认证中心的授权流程签发（同时完成 PKCE、state、�
 
 | 端点 | 行为 |
 | --- | --- |
-| `GET /interaction/{uid}` | 已登录：继续流程；未登录：302 到 `{LOGIN_UI_URL}?interaction={uid}` |
-| `POST /interaction/{uid}/login` | JSON `{username, password}`；成功 200 `{redirectTo}`；失败 401 `{error}`；CORS 白名单 + 凭据 |
+| `GET /api/sso/interaction/{uid}` | 已登录：继续流程；未登录：302 到 `{LOGIN_UI_URL}?interaction={uid}` |
+| `POST /api/sso/interaction/{uid}/login` | JSON `{username, password}`；成功 200 `{redirectTo}`；失败 401 `{error}`；CORS 白名单 + 凭据 |
 
 令牌契约（网关 / 服务遵守）：
 
@@ -203,7 +205,7 @@ sso/
 2. 接入方式为 SPA 直连（已确认）：浏览器 JS 直连 token 端点换令牌
    （public client，PKCE 必需；token / userinfo 端点需 CORS 白名单）。
 3. **服务间认证本轮不做（已确认）**，下一轮实现（设计概要见第 8 节）。
-4. 部署建议：认证中心与前端同站（同一父域名；本地同用 `127.0.0.1`），
+4. 部署路径固定为前端公网域名下的 `/api/sso/**`，由前后端 Nginx 原样转发，
    保证 Cookie 策略简单可靠。
 
 ## 14. 开始实现前需要你提供的信息
