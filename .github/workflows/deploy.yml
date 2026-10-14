@@ -190,18 +190,28 @@ jobs:
             fi
             mv .image.env.next .image.env
 
-            if docker compose --env-file .env --env-file .image.env config --quiet \
-              && docker compose --env-file .env --env-file .image.env pull sso \
-              && docker compose --env-file .env --env-file .image.env up \
+            if ! docker compose --env-file .env --env-file .image.env config --quiet; then
+              echo 'Compose configuration validation failed.' >&2
+            elif ! docker compose --env-file .env --env-file .image.env pull sso; then
+              echo 'Image pull failed.' >&2
+            elif docker compose --env-file .env --env-file .image.env up \
                 -d \
                 --remove-orphans \
                 --wait \
                 --wait-timeout 90 \
                 sso
             then
-              docker compose --env-file .env --env-file .image.env ps sso
+              docker compose --env-file .env --env-file .image.env ps sso || true
               exit 0
+            else
+              echo 'New container failed its readiness check.' >&2
             fi
+
+            docker compose --env-file .env --env-file .image.env ps --all sso || true
+            docker compose --env-file .env --env-file .image.env logs \
+              --no-color \
+              --tail 200 \
+              sso || true
 
             echo 'Deployment failed; attempting rollback.' >&2
             if [ -f .image.env.previous ]; then
